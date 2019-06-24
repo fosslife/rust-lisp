@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::io;
 use std::num::ParseFloatError;
 
+// A Risp expression is any statement that can be executed.
+// consists of (, ), or +, 1,2, etc. +/- are functions
 #[derive(Clone)]
 enum RispExp {
     Symbol(String),
@@ -10,19 +13,23 @@ enum RispExp {
     Func(fn(&[RispExp]) -> Result<RispExp, RispErr>),
 }
 
+// Risp error object. simply prints to stdin
 #[derive(Debug)]
 enum RispErr {
     Reason(String),
 }
 
+// hashmap for storing defined variables,
+// builtin functions etc
+// ex:
 #[derive(Clone)]
 struct RispEnv {
     data: HashMap<String, RispExp>,
 }
 
-impl ToString for RispExp {
-    fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for RispExp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let str = match self {
             RispExp::Symbol(s) => s.clone(),
             RispExp::Number(n) => n.to_string(),
             RispExp::List(list) => {
@@ -30,7 +37,9 @@ impl ToString for RispExp {
                 format!("({})", xs.join(","))
             }
             RispExp::Func(_) => "Function {}".to_string(),
-        }
+        };
+
+        write!(f, "{}", str)
     }
 }
 
@@ -42,41 +51,50 @@ fn tokenize(expr: String) -> Vec<String> {
         .collect()
 }
 
-fn parse(tokens: &[String], pos: usize) -> Result<(RispExp, usize), RispErr> {
-    let token = tokens.get(pos).ok_or(RispErr::Reason(format!(
-        "Could not get token for pos={}",
-        pos
-    )))?;
+// parse function to deside what to do based on
+// what type of token is recieved. like if it's
+// a ( then seq is started, if it's a ) then an
+// unexpected token is recieved otherwise we need
+// to evaluate the further expressions by parse_atom()  method
+fn parse<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr> {
+    // get first token
+    let (token, rest) = tokens
+        .split_first()
+        .ok_or(RispErr::Reason("could not get token".to_string()))?;
 
+    // Parsing each token individually. token is a slice, we match against it.
+    // token.as_str() will do the same.
     match &token[..] {
-        "(" => read_seq(tokens, pos + 1),
-        ")" => Err(RispErr::Reason("unexpected `)`".to_string())),
-        _ => Ok((parse_atom(token), pos + 1)),
+        "(" => read_seq(rest),
+        ")" => Err(RispErr::Reason("Unexpected )".to_string())),
+        _ => Ok((parse_atom(token), rest)),
     }
 }
 
-fn read_seq(tokens: &[String], start: usize) -> Result<(RispExp, usize), RispErr> {
+// it's definitly a sequence after ( as per out logic
+fn read_seq<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr> {
     let mut res: Vec<RispExp> = vec![];
-    let mut next = start;
+    let mut xs = tokens;
     loop {
-        let next_token = tokens
-            .get(next)
-            .ok_or(RispErr::Reason("could not find closing `)`".to_string()))?;
+        let (next_token, rest) = xs
+            .split_first()
+            .ok_or(RispErr::Reason("could not find closing )".to_string()))?;
 
         if next_token == ")" {
-            return Ok((RispExp::List(res), next + 1));
+            return Ok((RispExp::List(res), rest));
         }
 
-        let (exp, new_next) = parse(&tokens, next)?;
+        let (exp, new_xs) = parse(&xs)?;
         res.push(exp);
-        next = new_next;
+        xs = new_xs;
     }
 }
 
+// atom is the smallest unit. if the atom is a number
+// return Risp Number else return Risp Symbol
 fn parse_atom(token: &str) -> RispExp {
-    let pot_float: Result<f64, ParseFloatError> = token.parse();
-
-    match pot_float {
+    let potential_float: Result<f64, ParseFloatError> = token.parse();
+    match potential_float {
         Ok(v) => RispExp::Number(v),
         Err(_) => RispExp::Symbol(token.to_string().clone()),
     }
@@ -84,12 +102,14 @@ fn parse_atom(token: &str) -> RispExp {
 
 fn default_env() -> RispEnv {
     let mut data: HashMap<String, RispExp> = HashMap::new();
+
+    //Insert the functions in Risp Env
     data.insert(
         "+".to_string(),
         RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
             let sum = parse_list_of_floats(args)?
                 .iter()
-                .fold(0.0, |sum, a| sum + a);
+                .sum();
 
             Ok(RispExp::Number(sum))
         }),
@@ -98,11 +118,11 @@ fn default_env() -> RispEnv {
     data.insert(
         "-".to_string(),
         RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
-            let floats = parse_list_of_floats(args)?;
-            let first = *floats
+            let floats: Vec<f64> = parse_list_of_floats(args)?;
+            let first: f64 = *floats
                 .first()
                 .ok_or(RispErr::Reason("expected at least one number".to_string()))?;
-            let sum_of_rest = floats[1..].iter().fold(0.0, |sum, a| sum + a);
+            let sum_of_rest: f64 = floats[1..].iter().sum();
 
             Ok(RispExp::Number(first - sum_of_rest))
         }),
@@ -112,15 +132,13 @@ fn default_env() -> RispEnv {
 }
 
 fn parse_list_of_floats(args: &[RispExp]) -> Result<Vec<f64>, RispErr> {
-    args.iter()
-        .map(|x| parse_single_float(x))
-        .collect::<Result<Vec<f64>, RispErr>>()
+    args.iter().map(|x| parse_single_float(x)).collect()
 }
 
 fn parse_single_float(exp: &RispExp) -> Result<f64, RispErr> {
     match exp {
-        RispExp::Number(num) => Ok(*num),
-        _ => Err(RispErr::Reason("expected a number".to_string())),
+        RispExp::Number(n) => Ok(*n),
+        _ => Err(RispErr::Reason("Expected a number".to_string())),
     }
 }
 
@@ -153,11 +171,11 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     }
 }
 
-fn parse_eval_print(expr: String, env: &mut RispEnv) -> Result<String, RispErr> {
-    let (parsed_exp, _) = parse(&tokenize(expr), 0)?;
+fn parse_eval(expr: String, env: &mut RispEnv) -> Result<RispExp, RispErr> {
+    let (parsed_exp, _) = parse(&tokenize(expr))?;
     let evaled_exp = eval(&parsed_exp, env)?;
 
-    Ok(evaled_exp.to_string())
+    Ok(evaled_exp)
 }
 
 fn slurp_expr() -> String {
@@ -174,11 +192,11 @@ fn main() {
     let env = &mut default_env();
     loop {
         println!("risp >");
-        let expr = slurp_expr();;
-        match parse_eval_print(expr, env) {
-            Ok(res) => println!("// 🔥 => {}", res),
+        let expr = slurp_expr();
+        match parse_eval(expr, env) {
+            Ok(res) => println!("{}", res),
             Err(e) => match e {
-                RispErr::Reason(msg) => println!("// 🙀 => {}", msg),
+                RispErr::Reason(msg) => println!("X {}", msg),
             },
         }
     }
