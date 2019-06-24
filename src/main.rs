@@ -3,8 +3,8 @@ use std::fmt;
 use std::io;
 use std::num::ParseFloatError;
 
-// A Risp expression is any statement that can be executed.
-// consists of (, ), or +, 1,2, etc. +/- are functions
+/// A Risp expression is any statement that can be executed.
+/// consists of (, ), or +, 1,2, etc. +/- are functions
 #[derive(Clone)]
 enum RispExp {
     Symbol(String),
@@ -13,15 +13,15 @@ enum RispExp {
     Func(fn(&[RispExp]) -> Result<RispExp, RispErr>),
 }
 
-// Risp error object. simply prints to stdin
+/// Risp error object. simply prints to stdin
 #[derive(Debug)]
 enum RispErr {
     Reason(String),
 }
 
-// hashmap for storing defined variables,
-// builtin functions etc
-// ex:
+/// hashmap for storing defined variables,
+/// builtin functions etc
+/// ex:
 #[derive(Clone)]
 struct RispEnv {
     data: HashMap<String, RispExp>,
@@ -43,6 +43,8 @@ impl fmt::Display for RispExp {
     }
 }
 
+/// split the entire string into chunks of tokens. every single
+/// thing on small scale is a token
 fn tokenize(expr: String) -> Vec<String> {
     expr.replace("(", " ( ")
         .replace(")", " ) ")
@@ -51,11 +53,11 @@ fn tokenize(expr: String) -> Vec<String> {
         .collect()
 }
 
-// parse function to deside what to do based on
-// what type of token is recieved. like if it's
-// a ( then seq is started, if it's a ) then an
-// unexpected token is recieved otherwise we need
-// to evaluate the further expressions by parse_atom()  method
+/// parse function to deside what to do based on
+/// what type of token is recieved. like if it's
+/// a ( then seq is started, if it's a ) then an
+/// unexpected token is recieved otherwise we need
+/// to evaluate the further expressions by parse_atom()  method
 fn parse<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr> {
     // get first token
     let (token, rest) = tokens
@@ -71,7 +73,7 @@ fn parse<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr> {
     }
 }
 
-// it's definitly a sequence after ( as per out logic
+/// it's definitly a sequence after ( as per out logic
 fn read_seq<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr> {
     let mut res: Vec<RispExp> = vec![];
     let mut xs = tokens;
@@ -90,8 +92,8 @@ fn read_seq<'a>(tokens: &'a [String]) -> Result<(RispExp, &'a [String]), RispErr
     }
 }
 
-// atom is the smallest unit. if the atom is a number
-// return Risp Number else return Risp Symbol
+/// atom is the smallest unit. if the atom is a number
+/// return Risp Number else return Risp Symbol
 fn parse_atom(token: &str) -> RispExp {
     let potential_float: Result<f64, ParseFloatError> = token.parse();
     match potential_float {
@@ -100,6 +102,8 @@ fn parse_atom(token: &str) -> RispExp {
     }
 }
 
+/// default env that stores a map of default functions like +/- and their
+/// implementation.
 fn default_env() -> RispEnv {
     let mut data: HashMap<String, RispExp> = HashMap::new();
 
@@ -131,10 +135,13 @@ fn default_env() -> RispEnv {
     RispEnv { data }
 }
 
+/// Take a reference to a vector and parse it. i.e. convert
+/// Each number in vector to Risp Number
 fn parse_list_of_floats(args: &[RispExp]) -> Result<Vec<f64>, RispErr> {
     args.iter().map(|x| parse_single_float(x)).collect()
 }
 
+/// Convert given float to Risp Number
 fn parse_single_float(exp: &RispExp) -> Result<f64, RispErr> {
     match exp {
         RispExp::Number(n) => Ok(*n),
@@ -142,6 +149,8 @@ fn parse_single_float(exp: &RispExp) -> Result<f64, RispErr> {
     }
 }
 
+/// Basic evaluator, takes an expression and environment (rispenv)
+/// and `evaluates` it based on pattern matching
 fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     match exp {
         RispExp::Symbol(k) => env
@@ -171,6 +180,8 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     }
 }
 
+/// Basically entry point of compiler itself, (not the app, the compiler)
+/// The tokenization, parsing and evaluation is done here
 fn parse_eval(expr: String, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     let (parsed_exp, _) = parse(&tokenize(expr))?;
     let evaled_exp = eval(&parsed_exp, env)?;
@@ -178,6 +189,7 @@ fn parse_eval(expr: String, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     Ok(evaled_exp)
 }
 
+/// Reads input from stdin
 fn slurp_expr() -> String {
     let mut expr = String::new();
 
@@ -188,6 +200,7 @@ fn slurp_expr() -> String {
     expr
 }
 
+/// Entry point of application. 
 fn main() {
     let env = &mut default_env();
     loop {
