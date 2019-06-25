@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::num::ParseFloatError;
-// use std::rc::Rc;
+use std::rc::Rc;
 
 /// A Risp expression is any statement that can be executed.
 /// consists of (, ), or +, 1,2, etc. +/- are functions
@@ -13,6 +13,13 @@ enum RispExp {
     Number(f64),
     List(Vec<RispExp>),
     Func(fn(&[RispExp]) -> Result<RispExp, RispErr>),
+    Lambda(RispLambda),
+}
+
+#[derive(Clone)]
+struct RispLambda {
+    params_exp: Rc<RispExp>,
+    body_exp: Rc<RispExp>,
 }
 
 /// Risp error object. simply prints to stdin
@@ -25,13 +32,15 @@ enum RispErr {
 /// builtin functions etc
 /// ex:
 #[derive(Clone)]
-struct RispEnv {
+struct RispEnv<'a> {
     data: HashMap<String, RispExp>,
+    outer: Option<&'a RispEnv<'a>>,
 }
 
 impl fmt::Display for RispExp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let str = match self {
+            RispExp::Lambda(_) => "Lambda {}".to_string(),
             RispExp::Bool(a) => a.to_string(),
             RispExp::Symbol(s) => s.clone(),
             RispExp::Number(n) => n.to_string(),
@@ -132,7 +141,7 @@ fn parse_atom(token: &str) -> RispExp {
 
 /// default env that stores a map of default functions like +/- and their
 /// implementation.
-fn default_env() -> RispEnv {
+fn default_env<'a>() -> RispEnv<'a> {
     let mut data: HashMap<String, RispExp> = HashMap::new();
 
     //Insert the functions in Risp Env
@@ -179,7 +188,7 @@ fn default_env() -> RispEnv {
         RispExp::Func(ensure_tonicity!(|a, b| a <= b)),
     );
 
-    RispEnv { data }
+    RispEnv { data, outer: None }
 }
 
 /// Take a reference to a vector and parse it. i.e. convert
@@ -196,14 +205,23 @@ fn parse_single_float(exp: &RispExp) -> Result<f64, RispErr> {
     }
 }
 
+fn env_get(k: &str, env: &RispEnv) -> Option<RispExp> {
+    match env.data.get(k) {
+        Some(exp) => Some(exp.clone()),
+        None => match &env.outer {
+            Some(outer_env) => env_get(k, &outer_env),
+            None => None,
+        },
+    }
+}
+
 /// Basic evaluator, takes an expression and environment (rispenv)
 /// and `evaluates` it based on pattern matching
 fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     match exp {
+        RispExp::Lambda(_) => Err(RispErr::Reason("unexpected form".to_string())),
         RispExp::Bool(_a) => Ok(exp.clone()),
-        RispExp::Symbol(k) => env
-            .data
-            .get(k)
+        RispExp::Symbol(k) => env_get(k, env)
             .ok_or(RispErr::Reason(format!("unexpected symbol k={}", k)))
             .map(|x| x.clone()),
         RispExp::Number(_a) => Ok(exp.clone()),
@@ -217,12 +235,10 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
                 None => {
                     let first_eval = eval(first_form, env)?;
                     match first_eval {
-                        RispExp::Func(f) => {
-                            let args_eval = arg_forms
-                                .iter()
-                                .map(|x| eval(x, env))
-                                .collect::<Result<Vec<RispExp>, RispErr>>();
-                            f(&args_eval?)
+                        RispExp::Func(f) => f(&eval_forms(arg_forms, env)?),
+                        RispExp::Lambda(lambda) => {
+                            let new_env = &mut env_for_lambda(lambda.params_exp, arg_forms, env)?;
+                            eval(&lambda.body_exp, new_env)
                         }
                         _ => Err(RispErr::Reason("first form must be a function".to_string())),
                     }
@@ -233,6 +249,51 @@ fn eval(exp: &RispExp, env: &mut RispEnv) -> Result<RispExp, RispErr> {
     }
 }
 
+fn eval_forms(arg_forms: &[RispExp], env: &mut RispEnv) -> Result<Vec<RispExp>, RispErr> {
+    arg_forms.iter().map(|x| eval(x, env)).collect()
+}
+
+fn env_for_lambda<'a>(
+    params: Rc<RispExp>,
+    arg_forms: &[RispExp],
+    outer_env: &'a mut RispEnv,
+) -> Result<RispEnv<'a>, RispErr> {
+    let ks = parse_list_of_symbol_strings(params)?;
+    if ks.len() != arg_forms.len() {
+        return Err(RispErr::Reason(format!(
+            "expected {} arguments, got {}",
+            ks.len(),
+            arg_forms.len()
+        )));
+    }
+    let vs = eval_forms(arg_forms, outer_env)?;
+    let mut data: HashMap<String, RispExp> = HashMap::new();
+    for (k, v) in ks.iter().zip(vs.iter()) {
+        data.insert(k.clone(), v.clone());
+    }
+    Ok(RispEnv {
+        data,
+        outer: Some(outer_env),
+    })
+}
+
+fn parse_list_of_symbol_strings(form: Rc<RispExp>) -> Result<Vec<String>, RispErr> {
+    let list = match form.as_ref() {
+        RispExp::List(s) => Ok(s.clone()),
+        _ => Err(RispErr::Reason(
+            "expected args form to be a list".to_string(),
+        )),
+    }?;
+    list.iter()
+        .map(|x| match x {
+            RispExp::Symbol(s) => Ok(s.clone()),
+            _ => Err(RispErr::Reason(
+                "expected symbols in the argument list".to_string(),
+            )),
+        })
+        .collect()
+}
+
 fn eval_built_in_form(
     exp: &RispExp,
     arg_form: &[RispExp],
@@ -240,12 +301,32 @@ fn eval_built_in_form(
 ) -> Option<Result<RispExp, RispErr>> {
     match exp {
         RispExp::Symbol(s) => match s.as_ref() {
+            "fn" => Some(eval_lambda_args(arg_form)),
             "if" => Some(eval_if_args(arg_form, env)),
             "def" => Some(eval_def_args(arg_form, env)),
             _ => None,
         },
         _ => None,
     }
+}
+
+fn eval_lambda_args(arg_forms: &[RispExp]) -> Result<RispExp, RispErr> {
+    let params_exp = arg_forms
+        .first()
+        .ok_or(RispErr::Reason("expected args form".to_string()))?;
+    let body_exp = arg_forms
+        .get(1)
+        .ok_or(RispErr::Reason("expected second form".to_string()))?;
+    if arg_forms.len() > 2 {
+        return Err(RispErr::Reason(
+            "fn definition can only have two forms ".to_string(),
+        ));
+    }
+
+    Ok(RispExp::Lambda(RispLambda {
+        body_exp: Rc::new(body_exp.clone()),
+        params_exp: Rc::new(params_exp.clone()),
+    }))
 }
 
 fn eval_if_args(arg_forms: &[RispExp], env: &mut RispEnv) -> Result<RispExp, RispErr> {
@@ -321,7 +402,7 @@ fn main() {
         match parse_eval(expr, env) {
             Ok(res) => println!("{}", res),
             Err(e) => match e {
-                RispErr::Reason(msg) => println!("✗ good sir,  {} ✗", msg),
+                RispErr::Reason(msg) => println!("✗ {} ✗", msg),
             },
         }
     }
