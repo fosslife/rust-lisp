@@ -1,6 +1,10 @@
 use std::collections::HashMap;
+use std::env;
 use std::fmt;
+use std::fs;
 use std::io;
+use std::io::Write;
+
 use std::num::ParseFloatError;
 use std::rc::Rc;
 
@@ -385,7 +389,6 @@ fn parse_eval(expr: String, env: &mut RispEnv) -> Result<RispExp, RispErr> {
 /// Reads input from stdin
 fn slurp_expr() -> String {
     let mut expr = String::new();
-
     io::stdin()
         .read_line(&mut expr)
         .expect("Failed to read line");
@@ -394,16 +397,31 @@ fn slurp_expr() -> String {
 }
 
 /// Entry point of application.
-fn main() {
+fn main() -> Result<(), RispErr> {
     let env = &mut default_env();
-    loop {
-        println!("risp >");
-        let expr = slurp_expr();
-        match parse_eval(expr, env) {
-            Ok(res) => println!("{}", res),
-            Err(e) => match e {
-                RispErr::Reason(msg) => println!("✗ {} ✗", msg),
-            },
-        }
+    let args: Vec<String> = env::args().collect::<Vec<String>>();
+    let filename = args.get(1);
+    match filename {
+        Some(f) => {
+            let content = fs::read_to_string(f).unwrap();
+            let result = parse_eval(content, env);
+            match result {
+                Ok(res) => println!("{}", res),
+                Err(e) => match e {
+                    RispErr::Reason(msg) => println!("✗ {} ✗", msg),
+                },
+            }
+            Ok(())
+        },
+        None => loop {
+            println!("risp >");
+            let expr = slurp_expr();
+            match parse_eval(expr, env) {
+                Ok(res) => println!("{}", res),
+                Err(e) => match e {
+                    RispErr::Reason(msg) => println!("✗ {} ✗", msg),
+                },
+            }
+        },
     }
 }
