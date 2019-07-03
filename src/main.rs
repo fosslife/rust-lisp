@@ -159,6 +159,19 @@ fn default_env<'a>() -> RispEnv<'a> {
     );
 
     data.insert(
+        "/".to_string(),
+        RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
+            let floats = parse_list_of_floats(args)?;
+            let first: f64 = *floats
+                .first()
+                .ok_or(RispErr::Reason("expected at least one number".to_string()))?;
+            let product_of_rest: f64 = floats[1..].iter().product();
+
+            Ok(RispExp::Number(first / product_of_rest))
+        }),
+    );
+
+    data.insert(
         "-".to_string(),
         RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
             let floats: Vec<f64> = parse_list_of_floats(args)?;
@@ -412,7 +425,7 @@ fn main() -> Result<(), RispErr> {
                 },
             }
             Ok(())
-        },
+        }
         None => loop {
             println!("risp >");
             let expr = slurp_expr();
