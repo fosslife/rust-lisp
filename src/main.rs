@@ -172,6 +172,15 @@ fn default_env<'a>() -> RispEnv<'a> {
     );
 
     data.insert(
+        "*".to_string(),
+        RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
+            let product: f64 = parse_list_of_floats(args)?.iter().product();
+
+            Ok(RispExp::Number(product))
+        }),
+    );
+
+    data.insert(
         "-".to_string(),
         RispExp::Func(|args: &[RispExp]| -> Result<RispExp, RispErr> {
             let floats: Vec<f64> = parse_list_of_floats(args)?;
